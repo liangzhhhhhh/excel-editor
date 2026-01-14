@@ -1,6 +1,0 @@
-body { font-family: Arial, sans-serif; margin: 0; padding: 10px; }
-#toolbar { margin-bottom: 10px; }
-#toolbar button, #toolbar input { margin-right: 5px; }
-#tabs button { margin-right: 5px; }
-#spreadsheet table { border-collapse: collapse; }
-#spreadsheet td { border: 1px solid #ccc; padding: 5px; min-width: 100px; }
