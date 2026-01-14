@@ -1,0 +1,171 @@
+package main
+
+import (
+	"context"
+	"excel-editor/dataparser"
+	"fmt"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"os"
+	"path"
+)
+
+// App
+// @Description: 启动后需要向server建立sse连接，主要用于接收通知消息以及获取活动列表
+type App struct {
+	ctx context.Context
+}
+
+func NewApp() *App {
+	return &App{}
+}
+
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+func (a *App) ImportExcel(actId string) (resp CommonResponse) {
+	filepath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "请选择Excel文件",
+		Filters: []runtime.FileFilter{
+			{
+				DisplayName: "Excel",
+				Pattern:     "*.xlsx;*.xls",
+			},
+		},
+	})
+	if err != nil {
+		resp = ErrorResponse(err.Error())
+		return
+	}
+	dp, err := dataparser.NewExcelDataUnmarshall(filepath, actId)
+	if err != nil {
+		resp = ErrorResponse(err.Error())
+	}
+	err = dp.Parse()
+	if err != nil {
+		resp = ErrorResponse(err.Error())
+		return
+	}
+	resp = NormalResponse(dp.Workbook)
+	return
+}
+
+func (a *App) ExportExcel(wb dataparser.Workbook) (resp CommonResponse) {
+	tempDir := os.TempDir()
+	dp := new(dataparser.ExcelDataMarshall)
+	dp.Workbook = &wb
+	absolutePath := path.Join(tempDir, dp.Workbook.Name) + ".xlsx"
+	err := dp.Marshall(absolutePath)
+	if err != nil {
+		resp = ErrorResponse(err.Error())
+		return
+	}
+	resp = NormalResponse(absolutePath)
+	return
+}
+
+// FetchActConfig
+// @Description: 参数为活动ID
+// @author liangzh
+// @update 2025-12-15 17:47:54
+func (a *App) FetchActConfig(actId string) (resp CommonResponse) {
+	dp := new(dataparser.SelfDataUnmarshall)
+	headerContent := dp.ReadFile("D:\\A_workspace\\code\\excel-editor\\dataparser\\header.json")
+	if len(headerContent) == 0 {
+		resp = NoInitedResponse()
+		return
+	}
+	err := dp.UnmarshallHeader(headerContent)
+	if err != nil {
+		resp = ErrorResponse(err.Error())
+		return
+	}
+	contentContent := dp.ReadFile("D:\\A_workspace\\code\\excel-editor\\dataparser\\content.json")
+	workbook, err := dp.UnmarshallContent(contentContent)
+	if err != nil {
+		resp = ErrorResponse(err.Error())
+		return
+	}
+	workbookKey := "Activity_" + actId
+	workbook.Id = workbookKey
+	workbook.Name = workbookKey
+	resp = NormalResponse(workbook)
+	return
+}
+
+// FetchActList
+// @Description: 获取活动列表
+// @author liangzh
+// @update 2025-12-15 17:47:54
+func (a *App) FetchActList(query string) (resp CommonResponse) {
+	defer func() {
+		fmt.Println(resp.Data)
+	}()
+	ap := new(dataparser.AcrParser)
+	// 模拟获取数据
+	data := ap.ReadFile("D:\\A_workspace\\code\\excel-editor\\dataparser\\act_list.json")
+
+	err := ap.ParseData(data)
+	fmt.Println("获取数据了")
+	if err != nil {
+		resp = ErrorResponse(err.Error())
+		return
+	}
+	actInfos := ap.Find(query)
+	resp = NormalResponse(actInfos)
+	return
+}
+
+func (a *App) KeepActionConfig(wb dataparser.Workbook) (resp CommonResponse) {
+	dp := new(dataparser.SelfDataMarshall)
+	dp.Workbook = &wb
+	headerConfig, contentConfig, err := dp.Marshall()
+	if err != nil {
+		resp = ErrorResponse(err.Error())
+		return
+	}
+	dp.WriteFile("D:\\A_workspace\\code\\excel-editor\\dataparser\\header.json", headerConfig)
+	dp.WriteFile("D:\\A_workspace\\code\\excel-editor\\dataparser\\content.json", contentConfig)
+	resp = NormalResponse(nil)
+	return
+}
+
+// 数据解析函数
+
+type CommonResponse struct {
+	Status int    `json:"status"`
+	Msg    string `json:"msg"`
+	Data   any    `json:"data"`
+}
+
+type Code = int
+
+const (
+	NormalCode   Code = 20000
+	NoInitedCode Code = 30000
+	ErrorCode    Code = 50000
+)
+
+func ErrorResponse(msg string) CommonResponse {
+	resp := CommonResponse{
+		Status: ErrorCode,
+		Msg:    msg,
+	}
+	return resp
+}
+
+func NoInitedResponse() CommonResponse {
+	resp := CommonResponse{
+		Status: NoInitedCode,
+	}
+	return resp
+}
+
+func NormalResponse(data any) CommonResponse {
+	resp := CommonResponse{
+		Status: NormalCode,
+		Msg:    "success",
+		Data:   data,
+	}
+	return resp
+}
