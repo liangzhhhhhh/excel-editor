@@ -7,13 +7,16 @@ import (
 	"excel-editor/api"
 	"excel-editor/common"
 	"excel-editor/dataparser"
+	"excel-editor/log"
 	. "excel-editor/types"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"go.uber.org/zap"
 )
 
 // App
@@ -91,7 +94,6 @@ func (a *App) FetchActConfig(actId, ab string) (resp CommonResponse) {
 	dp := new(dataparser.SelfDataUnmarshall)
 	dp.ActId = actId
 	formId, _ := strconv.Atoi(actId)
-
 	httpResp, err := api.GetActInfo(int32(formId))
 	if err != nil {
 		resp = ErrorResponse(err.Error())
@@ -307,4 +309,12 @@ func (a *App) Login(username, password string) (resp CommonResponse) {
 	}
 	resp = NormalResponse(httpResp.Token)
 	return
+}
+
+func (a *App) LogError(message string, stack string) {
+	log.Log.Error(
+		"frontend error",
+		zap.String("message", message),
+		zap.String("stack", stack),
+	)
 }

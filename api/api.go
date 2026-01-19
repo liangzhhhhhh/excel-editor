@@ -21,7 +21,7 @@ func Auth(username, password string) (any, error) {
 	)
 	c := NewAPIClient(AuthURL)
 	var resp any
-	err := c.JSONRequest(http.MethodPost, endpoint, nil, nil, map[string]interface{}{
+	err := c.JSONRequest(nil, http.MethodPost, endpoint, nil, nil, map[string]interface{}{
 		"UserName": username,
 		"Password": password,
 		"Sign":     sign,
@@ -32,7 +32,7 @@ func Auth(username, password string) (any, error) {
 func GetActList() (*Response[[]BaseActConfig], error) {
 	c := NewAPIClient(BaseURL)
 	var resp Response[[]BaseActConfig]
-	err := c.JSONRequest("GET", "/DebugAction", map[string]string{"Content-Type": "application/json"}, nil, map[string]interface{}{
+	err := c.JSONRequest(nil, "GET", "/DebugAction", map[string]string{"Content-Type": "application/json"}, nil, map[string]interface{}{
 		"Cmd":    "1019",
 		"Action": "actlist",
 	}, &resp)
@@ -42,7 +42,7 @@ func GetActList() (*Response[[]BaseActConfig], error) {
 func GetActInfo(actId int32) (*Response[ActConfigRespBody], error) {
 	c := NewAPIClient(BaseURL)
 	var resp Response[ActConfigRespBody]
-	err := c.JSONRequest("POST", "/DebugAction", map[string]string{"Content-Type": "application/json"}, map[string]interface{}{
+	err := c.JSONRequest(nil, "POST", "/DebugAction", map[string]string{"Content-Type": "application/json"}, map[string]interface{}{
 		"ActId": actId,
 	}, map[string]interface{}{
 		"Cmd":    "1019",
@@ -55,7 +55,7 @@ func Login(username, password string) (*TokenResponse, error) {
 	var endpoint = "/"
 	c := NewAPIClient("https://fatcat-admin-test.54030.com")
 	var resp TokenResponse
-	err := c.FormDataRequest(http.MethodPost, endpoint, nil, map[string]interface{}{
+	err := c.FormDataRequest(nil, http.MethodPost, endpoint, nil, map[string]interface{}{
 		"UserName": username,
 		"Password": md5Hex(password),
 	}, map[string]interface{}{
@@ -76,7 +76,7 @@ func UploadConfig(fileInfo UploadFile, token string) (*UploadConfigResponse, err
 	var endpoint = "/"
 	c := NewAPIClient(OaURL)
 	var resp UploadConfigResponse
-	err := c.FormDataRequest(http.MethodPost, endpoint, nil, map[string]interface{}{
+	err := c.FormDataRequest(nil, http.MethodPost, endpoint, nil, map[string]interface{}{
 		"Token":      token,
 		"UploadFile": fileInfo,
 	}, map[string]interface{}{

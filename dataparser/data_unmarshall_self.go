@@ -8,12 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/labstack/gommon/log"
-	"github.com/tidwall/gjson"
 	"io/ioutil"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/labstack/gommon/log"
+	"github.com/tidwall/gjson"
 )
 
 type SelfDataUnmarshall struct {
@@ -71,11 +72,12 @@ func (dp *SelfDataUnmarshall) UnmarshallHeader(content []byte) (err error) {
 		orderIndexes = append(orderIndexes, value.OrderIndex)
 		if _, convErr := strconv.Atoi(mainKeys[len(mainKeys)-1]); convErr == nil {
 			sheetKey = mainKeys[0] + "-" + mainKeys[len(mainKeys)-1]
-			cfg.ConfigLevel.Open = true
+			// cfg.ConfigLevel.Open = true
 			if !slices.Contains(cfg.ConfigLevel.SheetKeys, sheetKey) {
 				cfg.ConfigLevel.SheetKeys = append(cfg.ConfigLevel.SheetKeys, sheetKey)
 			}
 		} else {
+			// 此处表达的是 Contant-1 这种形式
 			sheetKey = mainKeys[0] + "-1"
 		}
 		cfg.SheetConfigMap[sheetKey] = value
@@ -153,19 +155,18 @@ func (dp *SelfDataUnmarshall) tidyWorkBookUnmarshall(workBookData gjson.Result) 
 		SheetOrder: dp.WorkbookBaseConfig.SheetOrder,
 	}
 	//  进行了分层
-	if dp.ConfigLevel.Open {
+	// if dp.ConfigLevel.Open {
+	if workBookData.Get("ConfigIDs").Exists() {
 		workBookData.ForEach(func(configKey, configContent gjson.Result) bool {
-			if configKey.Str == "Config" {
-				configContent.ForEach(func(subConfigKey, subConfigContent gjson.Result) bool {
-					sheets := dp.tidyBaseUnmarshall(subConfigKey.Str, subConfigContent)
-					if len(sheets) > 0 {
-						for _, sheet := range sheets {
-							workbook.Sheets[sheet.Id] = sheet
-						}
+			configContent.ForEach(func(subConfigKey, subConfigContent gjson.Result) bool {
+				sheets := dp.tidyBaseUnmarshall(subConfigKey.Str, subConfigContent)
+				if len(sheets) > 0 {
+					for _, sheet := range sheets {
+						workbook.Sheets[sheet.Id] = sheet
 					}
-					return true
-				})
-			}
+				}
+				return true
+			})
 			return true
 		})
 	} else {

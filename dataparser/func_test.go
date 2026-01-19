@@ -5,6 +5,7 @@
 package dataparser
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 )
@@ -17,11 +18,12 @@ func TestUnmarshallSelf(t *testing.T) {
 		t.Error(err)
 	}
 	contentContent := dp.ReadFile("./content.json")
-	workbook, err := dp.UnmarshallContent(contentContent)
+	workbook, err := dp.UnmarshallContent("", contentContent)
 	if err != nil {
 		t.Error(err)
 	}
-	fmt.Printf("%+v\n", workbook)
+	data, _ := json.Marshal(workbook)
+	fmt.Printf("%s\n", string(data))
 }
 
 func TestMarshallSelf(t *testing.T) {

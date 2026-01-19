@@ -15,6 +15,7 @@ import { initGlobal, clearLoingInfo } from "@/views/utils/index";
 import {handleResp} from "@/config/apis/filter";
 import storage from "@/utils/tools/storage";
 import {Message} from "@arco-design/web-vue";
+import {runApi} from "@/config/apis/api";
 const router = useRouter();
 
 const loading = ref(false);
@@ -48,8 +49,7 @@ const handleSubmit = async (): Promise<any> => {
   if (v) return;
   try {
       loading.value = true;
-      const resp = await Login(formData.value.username, formData.value.password);
-      const xToken = handleResp(resp)
+      const xToken = await runApi(()=>Login(formData.value.username, formData.value.password))
       if (xToken.length > 0) {
           window.localStorage.setItem("token",xToken);
           Message.success("登录成功");
@@ -60,7 +60,7 @@ const handleSubmit = async (): Promise<any> => {
       }
   } catch (error: any) {
       loading.value = false;
-      Message.error(`账号密码错误`);
+      // Message.error(`账号密码错误:${error}`);
   }
 };
 

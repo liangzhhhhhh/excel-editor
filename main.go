@@ -2,16 +2,22 @@ package main
 
 import (
 	"embed"
+	"excel-editor/log"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"go.uber.org/zap"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+
+	log.Init("Excel Editor")
+
+	log.Log.Info("Application starting")
 	// Create an instance of the app structure
 	app := NewApp()
 
@@ -31,7 +37,7 @@ func main() {
 	})
 
 	if err != nil {
-		println("Error:", err.Error())
+		log.Log.Error("Application starting failed", zap.Error(err))
 	}
 }
 

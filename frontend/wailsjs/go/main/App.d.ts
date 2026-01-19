@@ -15,6 +15,8 @@ export function ImportExcel(arg1:string,arg2:string):Promise<types.CommonRespons
 
 export function KeepActionConfig(arg1:dataparser.Workbook,arg2:string):Promise<types.CommonResponse>;
 
+export function LogError(arg1:string,arg2:string):Promise<void>;
+
 export function Login(arg1:string,arg2:string):Promise<types.CommonResponse>;
 
 export function TempActKeep(arg1:dataparser.Workbook):Promise<types.CommonResponse>;

@@ -2,41 +2,56 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"strings"
+	"time"
 )
 
-const BaseURL = "http://192.168.1.6:3001"
+// const BaseURL = "http://192.168.1.6:3001"
+const BaseURL = "http://127.0.0.1:3000"
 const AuthURL = "http://wechat.aaagame.com"
 const OaURL = "https://fatcat-admin-test.54030.com"
 
 type APIClient struct {
-	BaseURL    string
-	HTTPClient *http.Client
+	BaseURL        string
+	HTTPClient     *http.Client
+	DefaultTimeout time.Duration
 }
 
 func NewAPIClient(baseURL string) *APIClient {
 	return &APIClient{
-		BaseURL:    baseURL,
-		HTTPClient: &http.Client{},
+		BaseURL:        baseURL,
+		HTTPClient:     &http.Client{Timeout: 0},
+		DefaultTimeout: 10 * time.Second,
 	}
 }
 
 func (c *APIClient) JSONRequest(
+	ctx context.Context,
 	method, path string,
 	header map[string]string,
 	requestBody interface{},
 	queryBody map[string]interface{},
 	result interface{},
 ) error {
-	var reqBody io.Reader
 
-	// 处理 requestBody
+	// 如果外部没传 ctx，就给一个默认超时
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(
+			context.Background(),
+			c.DefaultTimeout,
+		)
+		defer cancel()
+	}
+
+	var reqBody io.Reader
 	if requestBody != nil {
 		jsonData, err := json.Marshal(requestBody)
 		if err != nil {
@@ -45,60 +60,55 @@ func (c *APIClient) JSONRequest(
 		reqBody = bytes.NewBuffer(jsonData)
 	}
 
-	// 处理 queryBody
 	uri := c.BaseURL + path
 	if len(queryBody) > 0 {
 		q := url.Values{}
 		for k, v := range queryBody {
 			q.Set(k, fmt.Sprintf("%v", v))
 		}
-		if strings.Contains(uri, "?") {
-			uri += "&" + q.Encode()
-		} else {
-			uri += "?" + q.Encode()
-		}
+		uri += "?" + q.Encode()
 	}
-	// 创建请求
-	req, err := http.NewRequest(method, uri, reqBody)
+
+	// ⚠️ 用 NewRequestWithContext
+	req, err := http.NewRequestWithContext(ctx, method, uri, reqBody)
 	if err != nil {
 		return err
 	}
 
-	// 设置 header
-	if header != nil {
-		for k, v := range header {
-			req.Header.Set(k, v)
-		}
+	for k, v := range header {
+		req.Header.Set(k, v)
 	}
-	// 默认 Content-Type 为 JSON，如果没有自定义
 	if _, ok := header["Content-Type"]; !ok {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	// 执行请求
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
+		// 👇 关键：区分超时 / 主动取消
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("request timeout")
+		}
+		if errors.Is(err, context.Canceled) {
+			return fmt.Errorf("request canceled")
+		}
 		return err
 	}
 	defer resp.Body.Close()
-	// 检查 HTTP 状态码
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
 	}
-	//bodyBytes, err := io.ReadAll(resp.Body)
-	//if err != nil {
-	//	return err
-	//}
-	//fmt.Println(string(bodyBytes))
-	// 解码 JSON 到 result
+
 	if result != nil {
 		return json.NewDecoder(resp.Body).Decode(result)
 	}
+
 	return nil
 }
 
 func (c *APIClient) FormDataRequest(
+	ctx context.Context,
 	method, path string,
 	header map[string]string,
 	formBody map[string]interface{},
@@ -106,89 +116,63 @@ func (c *APIClient) FormDataRequest(
 	result interface{},
 ) error {
 
-	// 创建 multipart writer
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), c.DefaultTimeout)
+		defer cancel()
+	}
+
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
-	// 写入 form 字段
+
 	for k, v := range formBody {
 		switch val := v.(type) {
 		case string:
 			_ = writer.WriteField(k, val)
-		case []byte:
-			part, err := writer.CreateFormField(k)
-			if err != nil {
-				return err
-			}
-			_, _ = part.Write(val)
 		case UploadFile:
-			fileInfo := v.(UploadFile)
-			part, err := writer.CreateFormFile(k, fileInfo.Filename)
+			part, err := writer.CreateFormFile(k, val.Filename)
 			if err != nil {
 				return err
 			}
-			_, err = io.Copy(part, fileInfo.Reader)
+			_, _ = io.Copy(part, val.Reader)
 		default:
 			_ = writer.WriteField(k, fmt.Sprintf("%v", val))
 		}
 	}
+	_ = writer.Close()
 
-	// 一定要 close，boundary 才会写完
-	if err := writer.Close(); err != nil {
-		return err
-	}
-
-	// 构建 URI + query
 	uri := c.BaseURL + path
 	if len(queryBody) > 0 {
 		q := url.Values{}
 		for k, v := range queryBody {
 			q.Set(k, fmt.Sprintf("%v", v))
 		}
-		if strings.Contains(uri, "?") {
-			uri += "&" + q.Encode()
-		} else {
-			uri += "?" + q.Encode()
-		}
+		uri += "?" + q.Encode()
 	}
 
-	// 创建请求
-	req, err := http.NewRequest(method, uri, &buf)
+	req, err := http.NewRequestWithContext(ctx, method, uri, &buf)
 	if err != nil {
 		return err
 	}
 
-	// 设置 Header
-	if header != nil {
-		for k, v := range header {
-			req.Header.Set(k, v)
-		}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	for k, v := range header {
+		req.Header.Set(k, v)
 	}
-	contentType := writer.FormDataContentType()
-	// ⚠️ multipart 的 Content-Type 必须来自 writer
-	req.Header.Set("Content-Type", contentType)
 
-	// 发请求
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	// 状态码检查
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
+	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
 	}
 
-	fmt.Println(string(bodyBytes))
-
-	// 反序列化
 	if result != nil {
-		return json.Unmarshal(bodyBytes, result)
+		return json.Unmarshal(body, result)
 	}
 
 	return nil
