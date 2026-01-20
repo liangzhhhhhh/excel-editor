@@ -10,12 +10,13 @@ import (
 	"excel-editor/common"
 	"excel-editor/dataparser"
 	"fmt"
-	"github.com/labstack/gommon/log"
-	"github.com/xuri/excelize/v2"
 	"os"
 	"path"
 	"strconv"
 	"testing"
+
+	"github.com/labstack/gommon/log"
+	"github.com/xuri/excelize/v2"
 )
 
 //import (

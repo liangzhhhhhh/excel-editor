@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"excel-editor/api"
 	"excel-editor/common"
@@ -93,149 +95,117 @@ func (a *App) ExportExcel(wb dataparser.Workbook) (resp CommonResponse) {
 func (a *App) FetchActConfig(actId, ab string) (resp CommonResponse) {
 	dp := new(dataparser.SelfDataUnmarshall)
 	dp.ActId = actId
-	formId, _ := strconv.Atoi(actId)
-	httpResp, err := api.GetActInfo(int32(formId))
-	if err != nil {
-		resp = ErrorResponse(err.Error())
-		return
-	}
-	if httpResp.Status != NormalCode {
-		if httpResp.Status == NoInitedCode {
-			resp = NoInitedResponse()
-			return
-		}
-		resp = ErrorResponse(httpResp.Msg)
-		return
+
+	httpResp, resp := a.getActInfoResponse(actId)
+	if resp.Status != NormalCode {
+		return resp
 	}
 
-	err = dp.UnmarshallHeader([]byte(httpResp.Data.Header))
+	err := dp.UnmarshallHeader([]byte(httpResp.Data.Header))
 	if err != nil {
-		resp = ErrorResponse(err.Error())
-		return
+		return ErrorResponse(err.Error())
 	}
 
 	workbook, err := dp.UnmarshallContent(ab, []byte(httpResp.Data.Content))
 	if err != nil {
-		resp = ErrorResponse(err.Error())
-		return
+		return ErrorResponse(err.Error())
 	}
 
-	resp = NormalResponse(workbook)
-	return
+	md5StrOld := md5Hex(httpResp.Data.Content)
+	if err := UpdateActMD5(actId, md5StrOld); err != nil {
+		return ErrorResponse(err.Error())
+	}
+
+	return NormalResponse(workbook)
 }
 
 // FetchActList
 // @Description: 获取活动列表
 // @author liangzh
 // @update 2025-12-15 17:47:54
-func (a *App) FetchActList(_ string) (resp CommonResponse) {
+func (a *App) FetchActList(_ string) CommonResponse {
 	httpResp, err := api.GetActList()
 	if err != nil {
-		resp = ErrorResponse(err.Error())
-		return
+		return ErrorResponse(err.Error())
 	}
-	//fmt.Println(httpResp)
+
 	if httpResp.Status != NormalCode {
-		resp = ErrorResponse(httpResp.Msg)
-		return
+		return ErrorResponse(httpResp.Msg)
 	}
-	resp = NormalResponse(httpResp.Data)
-	//resp = GenResponse(AuthCode, "")
-	return
+
+	return NormalResponse(httpResp.Data)
 }
 
 // KeepActionConfig
 // @Description: 保存配置至线上
 // @author liangzh
 // @update 2025-12-29 11:39:03
-func (a *App) KeepActionConfig(wb dataparser.Workbook, token string) (resp CommonResponse) {
+func (a *App) KeepActionConfig(wb dataparser.Workbook, token string) CommonResponse {
 	fileName := wb.Id + "_配置表.xlsx"
 	dp := new(dataparser.ExcelDataMarshall)
 	dp.Workbook = &wb
-	err := dp.Marshall()
-	if err != nil {
-		resp = ErrorResponse(err.Error())
-		return
+
+	if err := dp.Marshall(); err != nil {
+		return ErrorResponse(err.Error())
 	}
 
 	var buf bytes.Buffer
 	if err := dp.File.Write(&buf); err != nil {
-		resp = ErrorResponse(err.Error())
-		return
+		return ErrorResponse(err.Error())
 	}
-	//fmt.Println(len(buf.Bytes()))
+
 	fileInfo := api.UploadFile{
 		Reader:   &buf,
 		Filename: fileName,
 	}
+
 	httpResp, err := api.UploadConfig(fileInfo, token)
 	if err != nil {
-		resp = ErrorResponse(err.Error())
-		return
+		return ErrorResponse(err.Error())
 	}
 
 	if httpResp.Result != 0 {
 		if !httpResp.IsLogin {
-			resp = GenResponse(AuthCode, "")
-			return
+			return GenResponse(AuthCode, "")
 		}
-		resp = ErrorResponse(httpResp.Tip)
-		return
+		return ErrorResponse(httpResp.Tip)
 	}
-	resp = NormalResponse("更新成功")
-	return
+
+	return NormalResponse("更新成功")
 }
 
 // TempActKeep
 // @Description: 临时存储活动信息
 // @author liangzh
 // @update 2025-12-29 13:31:22
-func (a *App) TempActKeep(wb dataparser.Workbook) (resp CommonResponse) {
+func (a *App) TempActKeep(wb dataparser.Workbook) CommonResponse {
 	baseDir := path.Join(common.TempDataDir, common.TmpExcelEditorDir)
-	// 1. 确保目录存在
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return ErrorResponse("create temp dir failed: " + err.Error())
 	}
-	id := wb.Id
-	baseID := id
 
-	// 2. 判断是否 _A / _B 结尾
-	if strings.HasSuffix(id, "_A") {
-		baseID = strings.TrimSuffix(id, "_A")
-		_ = os.Remove(path.Join(baseDir, baseID))
-	} else if strings.HasSuffix(id, "_B") {
-		baseID = strings.TrimSuffix(id, "_B")
-		_ = os.Remove(path.Join(baseDir, baseID))
-	} else {
-		// 没有后缀，删掉 A / B 分支
-		_ = os.Remove(path.Join(baseDir, id+"_A"))
-		_ = os.Remove(path.Join(baseDir, id+"_B"))
-	}
-	// 3. 当前最终写入路径
-	tempFilepath := path.Join(baseDir, id)
+	// 清理相关的旧文件
+	a.cleanupOldTempFiles(baseDir, wb.Id)
+
+	// 原子写入新文件
+	tempFilepath := path.Join(baseDir, wb.Id)
 	data, err := json.Marshal(wb)
 	if err != nil {
 		return ErrorResponse("marshal failed: " + err.Error())
 	}
 
-	// 4. 原子写入
-	tmp := tempFilepath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := a.writeFileAtomically(tempFilepath, data); err != nil {
 		return ErrorResponse("write temp file failed: " + err.Error())
-	}
-
-	if err := os.Rename(tmp, tempFilepath); err != nil {
-		return ErrorResponse("rename temp file failed: " + err.Error())
 	}
 
 	return NormalResponse(nil)
 }
 
 // GetTempAct
-// @Description: 临时存储活动信息
+// @Description: 获取临时存储的活动信息
 // @author liangzh
 // @update 2025-12-29 13:31:22
-func (a *App) GetTempAct(actId, ab string) (resp CommonResponse) {
+func (a *App) GetTempAct(actId, ab string) CommonResponse {
 	dir := path.Join(common.TempDataDir, common.TmpExcelEditorDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -244,63 +214,54 @@ func (a *App) GetTempAct(actId, ab string) (resp CommonResponse) {
 		}
 		return ErrorResponse("read temp act dir failed: " + err.Error())
 	}
-	var (
-		targetPrefix string
-		latestFile   os.DirEntry
-		latestTime   time.Time
-	)
-	// 1. 构造目标前缀
-	targetPrefix, _ = dataparser.GetWorkbookName(actId, ab)
-	// 2. 遍历目录
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		// 2.1 优先：找指定文件
-		if targetPrefix != "" && strings.HasPrefix(entry.Name(), targetPrefix) {
-			data, err := os.ReadFile(path.Join(dir, entry.Name()))
-			if err != nil {
-				return GenResponse(FileReadCode, "read temp act file failed: "+err.Error())
-			}
-			wb := new(dataparser.Workbook)
-			if err := json.Unmarshal(data, wb); err != nil {
-				return ErrorResponse(err.Error())
-			}
-			return NormalResponse(wb)
+
+	// 如果提供了 actId 和 ab，尝试查找指定文件
+	if actId != "" && ab != "" {
+		targetPrefix, err := dataparser.GetWorkbookName(actId, ab)
+		if err != nil {
+			return ErrorResponse("invalid actId or ab: " + err.Error())
 		}
 
-		// 2.2 记录最近文件
-		info, err := entry.Info()
-		if err != nil {
-			continue
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if strings.HasPrefix(entry.Name(), targetPrefix) {
+				return a.readTempActFile(dir, entry.Name())
+			}
 		}
-		if latestFile == nil || info.ModTime().After(latestTime) {
-			latestFile = entry
-			latestTime = info.ModTime()
-		}
+		return GenResponse(LocalFileNoFoundCode, "no temp act file found for specified actId and ab")
 	}
 
-	// 3. 回退：最近文件
+	// 未提供完整参数，查找最近修改的文件
+	latestFile := a.findLatestFile(entries)
 	if latestFile == nil {
 		return GenResponse(LocalFileNoFoundCode, "no temp act file found")
 	}
 
-	if actId != "" && ab != "" {
-		return GenResponse(LocalFileNoFoundCode, "no temp act file found")
-	}
+	return a.readTempActFile(dir, latestFile.Name())
+}
 
-	data, err := os.ReadFile(path.Join(dir, latestFile.Name()))
+// readTempActFile 读取并解析临时活动文件
+func (a *App) readTempActFile(dir, filename string) CommonResponse {
+	filePath := path.Join(dir, filename)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return GenResponse(FileReadCode, "read latest temp act file failed: "+err.Error())
+		return GenResponse(FileReadCode, "read temp act file failed: "+err.Error())
 	}
 
 	wb := new(dataparser.Workbook)
 	if err := json.Unmarshal(data, wb); err != nil {
-		return ErrorResponse(err.Error())
+		return ErrorResponse("unmarshal temp act file failed: " + err.Error())
 	}
+
 	return NormalResponse(wb)
 }
 
+// Login
+// @Description: 登录
+// @author liangzh
+// @update 2026-01-20 15:00:00
 func (a *App) Login(username, password string) (resp CommonResponse) {
 	httpResp, err := api.Login(username, password)
 	if err != nil {
@@ -311,10 +272,211 @@ func (a *App) Login(username, password string) (resp CommonResponse) {
 	return
 }
 
+// LogError
+// @Description: 记录错误日志
+// @author liangzh
+// @update 2026-01-20 15:00:00
 func (a *App) LogError(message string, stack string) {
 	log.Log.Error(
 		"frontend error",
 		zap.String("message", message),
 		zap.String("stack", stack),
 	)
+}
+
+// ConsistentCheck
+// @Description: 检查活动配置是否一致
+// @author liangzh
+// @update 2026-01-20 15:00:00
+func (a *App) ConsistentCheck(actId string) CommonResponse {
+	httpResp, resp := a.getActInfoResponse(actId)
+	if resp.Status != NormalCode && resp.Status != NoInitedCode {
+		return resp
+	}
+
+	md5StrNew := common.DefaultMD5
+	if httpResp.Status == NormalCode {
+		md5StrNew = md5Hex(httpResp.Data.Content)
+	}
+
+	md5Map, err := LoadActMD5Map()
+	if err != nil {
+		return ErrorResponse(err.Error())
+	}
+
+	md5StrOld, ok := md5Map[actId]
+	if !ok {
+		md5Map[actId] = common.DefaultMD5
+		md5StrOld = common.DefaultMD5
+	}
+
+	if md5StrOld != md5StrNew {
+		return GenResponse(ConsistentCheckCode, "活动配置已修改，请选择是否重新加载？")
+	}
+
+	return NormalResponse(nil)
+}
+
+// ConsistentSync
+// @Description: 进行一致性同步json值
+func (a *App) ConsistentSync(actId string) CommonResponse {
+	httpResp, resp := a.getActInfoResponse(actId)
+	if resp.Status != NormalCode {
+		return resp
+	}
+
+	md5Map, err := LoadActMD5Map()
+	if err != nil {
+		return ErrorResponse(err.Error())
+	}
+
+	md5StrNew := md5Hex(httpResp.Data.Content)
+	md5Map[actId] = md5StrNew
+
+	if err := SaveActMD5Map(md5Map); err != nil {
+		return ErrorResponse(err.Error())
+	}
+
+	return NormalResponse(nil)
+}
+
+func md5Hex(s string) string {
+	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+type ActMD5Map map[string]string
+
+func actMD5FilePath() string {
+	return path.Join(
+		common.TempDataDir,
+		common.TmpExcelEditorDir,
+		"act_md5.json",
+	)
+}
+
+func LoadActMD5Map() (ActMD5Map, error) {
+	filePath := actMD5FilePath()
+
+	data := ActMD5Map{}
+
+	b, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return data, nil
+		}
+		return nil, err
+	}
+
+	if len(b) == 0 {
+		return data, nil
+	}
+
+	if err := json.Unmarshal(b, &data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
+func SaveActMD5Map(data ActMD5Map) error {
+	dir := path.Join(common.TempDataDir, common.TmpExcelEditorDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	filePath := actMD5FilePath()
+	tmpPath := filePath + ".tmp"
+
+	b, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, filePath)
+}
+
+func UpdateActMD5(actId, md5Str string) error {
+	data, err := LoadActMD5Map()
+	if err != nil {
+		return err
+	}
+
+	data[actId] = md5Str
+
+	return SaveActMD5Map(data)
+}
+
+// ========== 辅助函数 ==========
+
+// getActInfoResponse 获取活动信息并处理响应
+func (a *App) getActInfoResponse(actId string) (*api.Response[api.ActConfigRespBody], CommonResponse) {
+	formId, err := strconv.Atoi(actId)
+	if err != nil {
+		return nil, ErrorResponse("invalid actId: " + err.Error())
+	}
+
+	httpResp, err := api.GetActInfo(int32(formId))
+	if err != nil {
+		return nil, ErrorResponse(err.Error())
+	}
+
+	if httpResp.Status != NormalCode {
+		if httpResp.Status == NoInitedCode {
+			return httpResp, NoInitedResponse()
+		}
+		return httpResp, ErrorResponse(httpResp.Msg)
+	}
+
+	return httpResp, NormalResponse(nil)
+}
+
+// cleanupOldTempFiles 清理旧的临时文件
+func (a *App) cleanupOldTempFiles(baseDir, id string) {
+	if strings.HasSuffix(id, "_A") {
+		baseID := strings.TrimSuffix(id, "_A")
+		_ = os.Remove(path.Join(baseDir, baseID))
+	} else if strings.HasSuffix(id, "_B") {
+		baseID := strings.TrimSuffix(id, "_B")
+		_ = os.Remove(path.Join(baseDir, baseID))
+	} else {
+		// 没有后缀，删掉 A / B 分支
+		_ = os.Remove(path.Join(baseDir, id+"_A"))
+		_ = os.Remove(path.Join(baseDir, id+"_B"))
+	}
+}
+
+// writeFileAtomically 原子写入文件
+func (a *App) writeFileAtomically(filepath string, data []byte) error {
+	tmpPath := filepath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, filepath)
+}
+
+// findLatestFile 查找最近修改的文件
+func (a *App) findLatestFile(entries []os.DirEntry) os.DirEntry {
+	var latestFile os.DirEntry
+	var latestTime time.Time
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if latestFile == nil || info.ModTime().After(latestTime) {
+			latestFile = entry
+			latestTime = info.ModTime()
+		}
+	}
+
+	return latestFile
 }

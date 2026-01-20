@@ -48,7 +48,7 @@ export async function runApi<T>(
         }
 
         // 不向上抛时，返回一个“空值”
-        return undefined as unknown as T
+        return err.cause ?? undefined as unknown as T
         // 或者 return undefined as unknown as T
 
     } finally {

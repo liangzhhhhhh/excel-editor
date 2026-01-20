@@ -1,4 +1,4 @@
-// Package main
+// Package api
 // @description
 // @author      梁志豪
 // @datetime    2025/12/25 19:32

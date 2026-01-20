@@ -12,3 +12,5 @@ var (
 )
 
 const TmpExcelEditorDir = "temp-excel-dir/"
+
+const DefaultMD5 = "default"

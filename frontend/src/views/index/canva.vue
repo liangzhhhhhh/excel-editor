@@ -3,6 +3,8 @@ import {createInstance} from "@/views/index/core/master";
 import {computed, h, onBeforeUnmount, onMounted, ref, watch} from "vue";
 import {ElMessageBox, ElOption, ElSelect} from "element-plus";
 import {
+    ConsistentCheck,
+    ConsistentSync,
     ExportExcel,
     FetchActConfig,
     GetTempAct,
@@ -14,6 +16,7 @@ import {dataparser} from "../../../wailsjs/go/models";
 import {Message} from "@arco-design/web-vue";
 import {runApi} from "@/config/apis/api";
 import {throttle} from "lodash-es";
+import { RespCode } from "@/config/apis/filter";
 
 // 常量定义
 const CONSTANTS = {
@@ -139,17 +142,18 @@ const createAndInitWorkbook = (workbookData: any) => {
 
 const selectedAct = async (priorityNet = false, ab: ABType = "", silent = false) => {
     let actConfigInfo: any
+    let msg: string
     if (priorityNet) {
         actConfigInfo = await loadNetActInfo(ab, true, false)
         if (!actConfigInfo) {
-            Message.warning('内网数据未拉取成功，尝试加载本地数据')
             actConfigInfo = await loadTempActInfo(String(props.actId), ab, silent)
+            msg = '本地数据未拉取成功，尝试加载内网数据'
         }
     } else {
         actConfigInfo = await loadTempActInfo(String(props.actId), ab, true, false)
         if (!actConfigInfo) {
-            Message.warning('本地数据未拉取成功，尝试加载内网数据')
             actConfigInfo = await loadNetActInfo(ab, silent)
+            msg = '内网数据未拉取成功，尝试加载本地数据'
         }
     }
 
@@ -175,6 +179,10 @@ const disposeUniver = () => {
     univerRef.value = null
     univerAPIRef.value = null
     stopTempKeepAct()
+    if (checkActConfigConsistencyInterval.value) {
+        clearInterval(checkActConfigConsistencyInterval.value)
+        checkActConfigConsistencyInterval.value = null
+    }
 }
 
 const initUniver = (workbookKey="") => {
@@ -194,6 +202,31 @@ const initUniver = (workbookKey="") => {
     univerAPIRef.value = univerAPI
     const el = document.getElementById("mainContainer")
     el?.classList.add("has-content")
+    // 定期检查活动配置一致性
+    checkActConfigConsistency()
+}
+
+const checkActConfigConsistencyInterval = ref<number | null>(null)
+
+const checkActConfigConsistency = async () => {
+    checkActConfigConsistencyInterval.value = window.setInterval(async () => {
+        try {
+            const res = await runApi(() => ConsistentCheck(String(props.actId)), {silent: true, throwOnError: false})
+            if (res === RespCode.ConsistentCheckCode) {
+                const confirm = await ElMessageBox.confirm('活动配置已修改，请选择是否重新加载？', '提示', {
+                    confirmButtonText: '重新加载',
+                    cancelButtonText: '取消',
+                })
+                if (confirm === 'cancel') {
+                    await runApi(() => ConsistentSync(String(props.actId)), {silent: true, throwOnError: false})
+                } else {
+                    toNetData()
+                }
+            }
+        } catch (e: any) {
+            Message.error(`检查活动配置一致性失败:${e.message}`)
+        }
+    }, CONSTANTS.AUTO_SAVE_INTERVAL)
 }
 
 type MenuType = typeof CONSTANTS.MENU_TYPE[keyof typeof CONSTANTS.MENU_TYPE]

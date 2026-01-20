@@ -15,12 +15,14 @@ type CommonResponse struct {
 type Code = int
 
 const (
-	NormalCode           Code = 20000
-	NoInitedCode         Code = 30000
-	AuthCode             Code = 40000
-	ErrorCode            Code = 50000
-	LocalFileNoFoundCode Code = 50001 // 文件未发现码
-	FileReadCode         Code = 50002 // 文件读取失败码
+	NormalCode                  Code = 20000
+	NoInitedCode                Code = 30000 // 内网数据未初始化码
+	AuthCode                    Code = 40000
+	ErrorCode                   Code = 50000
+	LocalFileNoFoundCode        Code = 50001 // 文件未发现码
+	FileReadCode                Code = 50002 // 文件读取失败码
+	ConsistentCheckCode         Code = 50003 // 活动配置一致性检查失败码
+	ConsistentCheckNoInitedCode Code = 50004 // 活动配置不存在码
 )
 
 func ErrorResponse(msg string) CommonResponse {
