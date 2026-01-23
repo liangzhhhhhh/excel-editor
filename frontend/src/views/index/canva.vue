@@ -142,30 +142,37 @@ const createAndInitWorkbook = (workbookData: any) => {
 
 const selectedAct = async (priorityNet = false, ab: ABType = "", silent = false) => {
     let actConfigInfo: any
-    let msg: string
+    
+    // 根据优先级加载配置信息
     if (priorityNet) {
+        // 优先从网络加载，失败则回退到本地
         actConfigInfo = await loadNetActInfo(ab, true, false)
-        if (!actConfigInfo) {
+        if (!actConfigInfo?.id) {
             actConfigInfo = await loadTempActInfo(String(props.actId), ab, silent)
-            msg = '本地数据未拉取成功，尝试加载内网数据'
         }
     } else {
+        // 优先从本地加载，失败则回退到网络
         actConfigInfo = await loadTempActInfo(String(props.actId), ab, true, false)
-        if (!actConfigInfo) {
+        if (!actConfigInfo?.id) {
             actConfigInfo = await loadNetActInfo(ab, silent)
-            msg = '内网数据未拉取成功，尝试加载本地数据'
         }
     }
 
-    if (!actConfigInfo || !actConfigInfo.id) {
+    // 如果两种方式都失败，提示需要新建
+    if (!actConfigInfo?.id) {
         disposeUniver()
-        btnGroupShow.value.btnGroup = true
-        btnGroupShow.value.importBtn = true
-        btnGroupShow.value.newBtn = true
-        btnGroupShow.value.loadCache = false
+        btnGroupShow.value = {
+            ...genBtnGroupShow(),
+            btnGroup: true,
+            importBtn: true,
+            newBtn: true,
+            loadCache: false,
+        }
         Message.warning("新活动配置，需要进行新建")
         return
     }
+
+    // 保存当前工作簿，然后加载新配置
     await toTempKeepAct()
     disposeUniver()
     initUniver(actConfigInfo.id)
@@ -183,6 +190,8 @@ const disposeUniver = () => {
         clearInterval(checkActConfigConsistencyInterval.value)
         checkActConfigConsistencyInterval.value = null
     }
+    // 重置对话框标志位
+    isConsistencyDialogOpen.value = false
 }
 
 const initUniver = (workbookKey="") => {
@@ -207,23 +216,39 @@ const initUniver = (workbookKey="") => {
 }
 
 const checkActConfigConsistencyInterval = ref<number | null>(null)
+const isConsistencyDialogOpen = ref(false) // 防止弹窗堆叠
 
 const checkActConfigConsistency = async () => {
     checkActConfigConsistencyInterval.value = window.setInterval(async () => {
+        // 如果已经有对话框在打开，跳过本次检查
+        if (isConsistencyDialogOpen.value) {
+            return
+        }
         try {
             const res = await runApi(() => ConsistentCheck(String(props.actId)), {silent: true, throwOnError: false})
             if (res === RespCode.ConsistentCheckCode) {
-                const confirm = await ElMessageBox.confirm('活动配置已修改，请选择是否重新加载？', '提示', {
-                    confirmButtonText: '重新加载',
-                    cancelButtonText: '取消',
-                })
-                if (confirm === 'cancel') {
-                    await runApi(() => ConsistentSync(String(props.actId)), {silent: true, throwOnError: false})
-                } else {
+                // 标记对话框正在打开
+                isConsistencyDialogOpen.value = true
+                try {
+                    await ElMessageBox.confirm('活动配置已修改，请选择是否重新加载？', '提示', {
+                        confirmButtonText: '重新加载',
+                        cancelButtonText: '取消',
+                    })
+                    // 用户点击重新加载，会重新获取数据并自动更新MD5
                     toNetData()
+                } catch (e: any) {
+                    if (e === 'cancel') {
+                        // 用户点击取消，同步MD5避免下次再弹出
+                        await runApi(() => ConsistentSync(String(props.actId)), {silent: true, throwOnError: false})
+                    }
+                } finally {
+                    // 对话框关闭后重置标志位
+                    isConsistencyDialogOpen.value = false
                 }
             }
         } catch (e: any) {
+            // 确保异常情况下也重置标志位
+            isConsistencyDialogOpen.value = false
             Message.error(`检查活动配置一致性失败:${e.message}`)
         }
     }, CONSTANTS.AUTO_SAVE_INTERVAL)
@@ -492,6 +517,7 @@ const keyBoardHandler = (e: KeyboardEvent) => {
 }
 
 watch(() => actIdModel.value, (val) => {
+    console.log(val)
     if (!val) return
     selectedAct()
 })
@@ -524,8 +550,8 @@ onBeforeUnmount(async () => {
             v-model:popupVisible="menuPopoverParams.visible"
         >
             <div :class="`button-trigger ${menuPopoverParams.visible ? 'button-trigger-active' : ''}`">
-                <IconClose size="22" v-if="menuPopoverParams.visible" />
-                <IconMessage size="22" v-else />
+                <IconClose size="30" v-if="menuPopoverParams.visible" />
+                <IconMessage size="30" v-else />
             </div>
             <template #content>
                 <a-menu
@@ -533,29 +559,30 @@ onBeforeUnmount(async () => {
                     mode="popButton"
                     :tooltipProps="{ position: 'left' }"
                     showCollapseButton
+                    class="custom-pop-menu"
                 >
                     <a-menu-item key="1" v-if="btnGroupShow.importBtn" @click="toImport">
-                        <template #icon><icon-upload/></template>
+                        <template #icon><icon-upload size="25" /></template>
                         导入配置
                     </a-menu-item>
                     <a-menu-item key="2" v-if="btnGroupShow.exportBtn" @click="toExport">
-                        <template #icon><icon-download/></template>
+                        <template #icon><icon-download size="25" /></template>
                         导出配置
                     </a-menu-item>
                     <a-menu-item key="3" v-if="btnGroupShow.newBtn" @click="toRenew()">
-                        <template #icon><icon-home/></template>
+                        <template #icon><icon-home size="25" /></template>
                         新建配置
                     </a-menu-item>
                     <a-menu-item key="4" v-if="btnGroupShow.updateBtn" @click="toHotUpdate">
-                        <template #icon><icon-cloud/></template>
+                        <template #icon><icon-cloud size="25" /></template>
                         更新内网
                     </a-menu-item>
                     <a-menu-item key="5" v-if="btnGroupShow.abCfgBtn" @click="toSwitchAB">
-                        <template #icon><icon-bold /></template>
+                        <template #icon><icon-bold size="25" /></template>
                         AB配置
                     </a-menu-item>
                     <a-menu-item key="6" v-if="btnGroupShow.forNetBtn" @click="toNetData">
-                        <template #icon><icon-drag-arrow/></template>
+                        <template #icon><icon-drag-arrow size="25" /></template>
                         同步实时数据
                     </a-menu-item>
                 </a-menu>
@@ -601,9 +628,85 @@ onBeforeUnmount(async () => {
 .menu {
     position: fixed;        /* 🔑 关键 */
     z-index: 999;
-    left: 90%;              /* 用 left/top，不要 right */
+    right: 20px;              /* 用 left/top，不要 right */
     bottom: 100px;
     user-select: none;
+}
+
+/* 按钮触发器样式，确保图标居中 */
+.button-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.button-trigger:hover {
+    background: #f5f5f5;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.button-trigger-active {
+    background: #e6f7ff;
+}
+
+/* 确保按钮中的图标居中 */
+.button-trigger :deep(svg),
+.button-trigger :deep(.arco-icon) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 菜单项图标居中 - 针对自定义弹出菜单 */
+:deep(.custom-pop-menu .arco-menu-item) {
+    display: flex !important;
+    align-items: center !important;
+}
+
+:deep(.custom-pop-menu .arco-menu-item-icon) {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
+    line-height: 1 !important;
+    width: 26px !important;
+    height: 26px !important;
+    margin-right: 8px !important;
+}
+
+/* 确保所有类型的图标都居中 */
+:deep(.custom-pop-menu .arco-menu-item-icon > *),
+:deep(.custom-pop-menu .arco-menu-item-icon svg),
+:deep(.custom-pop-menu .arco-menu-item-icon .arco-icon),
+:deep(.custom-pop-menu .arco-menu-item-icon svg-icon),
+:deep(.custom-pop-menu .arco-menu-item-icon [class*="icon"]) {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    flex-shrink: 0 !important;
+}
+
+/* SVG 图标特殊处理 */
+:deep(.custom-pop-menu .arco-menu-item-icon svg) {
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    display: block !important;
+}
+
+:deep(.arco-menu-pop-button .arco-menu-item){
+    width: 50px;
+    height: 50px;
 }
 
 .draggable {
@@ -783,161 +886,6 @@ onBeforeUnmount(async () => {
 
 :deep(.el-divider--horizontal) {
     margin: 0 5px 0 0;
-}
-
-
-#SocailIcons {
-    min-width: 350px;
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    justify-content: space-around;
-    align-items: center;
-}
-
-.icons {
-    position: relative; /* 关键 */
-    width: 50px;
-    height: 50px;
-    background: #fff;
-    border-radius: 50%;
-    cursor: pointer;
-    border: none;
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-}
-
-/* 提示文字 */
-.iconName {
-    position: absolute;
-    top: -38px;
-    left: 50%;
-    transform: translateX(-50%) scale(0);
-    font-size: 12px;
-    color: #fff;
-    border-radius: 4px;
-    padding: 4px 8px;
-    white-space: nowrap;
-    transition: transform 0.25s ease;
-    z-index: 10;
-}
-
-/* hover 统一生效 */
-.icons:hover .iconName {
-    transform: translateX(-50%) scale(1);
-}
-
-/* 不同类型只管颜色，不管位移 */
-.icons.instaIcon .iconName {
-    background: linear-gradient(30deg, #0000ff, #f56040);
-}
-
-.icons.linkedin .iconName {
-    background: #0274b3;
-}
-
-.icons.whatsapp .iconName {
-    background: #25d366;
-}
-
-.icons.youtube .iconName {
-    background: #ff0000;
-}
-
-.icons.hotupdate .iconName {
-    background: #ff0000;
-}
-
-.icons.abcfg .iconName {
-    background: #6cb400;
-}
-
-.icons.calibration .iconName {
-    background: #eac221;
-}
-
-
-.icons:hover .icon {
-    opacity: 1;
-    color: #fff;
-}
-
-
-.icon {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    background: transparent;
-    color: #333;
-}
-
-.icon::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    height: 0;
-    z-index: 0;
-}
-
-.icon:hover::before {
-    height: 100%;
-}
-
-.icon.tube::before {
-    background: red;
-}
-
-.icon.abcfg::before {
-    background: #6cb400;
-}
-
-.icon.calibration::before {
-    background: #eac221;
-}
-
-.icon.insta::before {
-    background: linear-gradient(40deg, #0000ff, #f56040);
-}
-
-.icon.link::before {
-    background: #0274b3;
-}
-
-.icon.whats::before {
-    background: #25d366;
-}
-
-.iconName {
-    position: absolute;
-    top: -34px;
-    left: 50%;
-    transform: translateX(-50%) translateY(6px);
-    opacity: 0;
-    font-size: 12px;
-    color: #fff;
-    background: #333;
-    padding: 4px 6px;
-    border-radius: 4px;
-    white-space: nowrap;
-    transition: opacity 0.2s ease,
-    transform 0.2s ease;
-    pointer-events: none;
-}
-
-
-.icons:hover .iconName {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
 }
 
 .btn-load-cache {

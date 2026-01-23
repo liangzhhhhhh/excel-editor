@@ -1,0 +1,70 @@
+name: Wails Cross-Platform Build
+
+on:
+  push:
+    tags:
+      - 'v*' # 当推送以 v 开头的标签时触发，如 v1.0.0
+  workflow_dispatch: # 允许手动触发构建
+
+jobs:
+  build:
+    strategy:
+      # 即使一个平台失败，其他平台继续构建
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+          - os: macos-latest
+            platform: darwin/universal # 构建 M1 + Intel 通用版本
+          - os: ubuntu-latest
+            platform: linux/amd64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. 安装 Go 环境
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          check-latest: true
+
+      # 2. 安装 Node.js (用于前端构建)
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3. 安装 Linux 依赖 (仅在 Ubuntu 运行)
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev build-essential pkg-config
+
+      # 4. 使用 Wails 官方 Action 进行构建
+      - name: Build Wails App
+        uses: wailsapp/wails-ghaction@v2
+        with:
+          build-name: ${{ github.event.repository.name }}
+          build-platform: ${{ matrix.platform }}
+          # 如果需要构建 Windows 安装包 (NSIS)，请确保项目内有 nsis 配置
+          package: true 
+          # 传入版本号（基于 Git Tag）
+          tag-name: ${{ github.ref_name }}
+
+      # 5. 上传构建产物到 GitHub Artifacts
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wails-build-${{ matrix.platform }}
+          path: |
+            build/bin/*
+            build/bin/*.exe
+            build/bin/*.app
+            build/bin/*.dmg
+            build/bin/*.deb

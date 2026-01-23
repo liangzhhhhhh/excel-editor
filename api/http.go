@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"excel-editor/config"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -13,10 +14,11 @@ import (
 	"time"
 )
 
-// const BaseURL = "http://192.168.1.6:3001"
-const BaseURL = "http://127.0.0.1:3000"
-const AuthURL = "http://wechat.aaagame.com"
-const OaURL = "https://fatcat-admin-test.54030.com"
+var (
+	BaseURL = config.GetConfig().BaseURL
+	AuthURL = config.GetConfig().AuthURL
+	OaURL   = config.GetConfig().OaURL
+)
 
 type APIClient struct {
 	BaseURL        string
@@ -32,24 +34,9 @@ func NewAPIClient(baseURL string) *APIClient {
 	}
 }
 
-func (c *APIClient) JSONRequest(
-	ctx context.Context,
-	method, path string,
-	header map[string]string,
-	requestBody interface{},
-	queryBody map[string]interface{},
-	result interface{},
-) error {
-
-	// 如果外部没传 ctx，就给一个默认超时
-	if ctx == nil {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(
-			context.Background(),
-			c.DefaultTimeout,
-		)
-		defer cancel()
-	}
+func (c *APIClient) JSONRequest(ctx context.Context, method, path string, header map[string]string, requestBody interface{}, queryBody map[string]interface{}, result interface{}) error {
+	ctx, cancel := c.ensureContext(ctx)
+	defer cancel()
 
 	var reqBody io.Reader
 	if requestBody != nil {
@@ -60,67 +47,18 @@ func (c *APIClient) JSONRequest(
 		reqBody = bytes.NewBuffer(jsonData)
 	}
 
-	uri := c.BaseURL + path
-	if len(queryBody) > 0 {
-		q := url.Values{}
-		for k, v := range queryBody {
-			q.Set(k, fmt.Sprintf("%v", v))
-		}
-		uri += "?" + q.Encode()
-	}
-
-	// ⚠️ 用 NewRequestWithContext
-	req, err := http.NewRequestWithContext(ctx, method, uri, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, c.buildURI(path, queryBody), reqBody)
 	if err != nil {
 		return err
 	}
 
-	for k, v := range header {
-		req.Header.Set(k, v)
-	}
-	if _, ok := header["Content-Type"]; !ok {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		// 👇 关键：区分超时 / 主动取消
-		if errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("request timeout")
-		}
-		if errors.Is(err, context.Canceled) {
-			return fmt.Errorf("request canceled")
-		}
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
-	}
-
-	if result != nil {
-		return json.NewDecoder(resp.Body).Decode(result)
-	}
-
-	return nil
+	c.setHeaders(req, header, "application/json")
+	return c.doRequest(req, result)
 }
 
-func (c *APIClient) FormDataRequest(
-	ctx context.Context,
-	method, path string,
-	header map[string]string,
-	formBody map[string]interface{},
-	queryBody map[string]interface{},
-	result interface{},
-) error {
-
-	if ctx == nil {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.Background(), c.DefaultTimeout)
-		defer cancel()
-	}
+func (c *APIClient) FormDataRequest(ctx context.Context, method, path string, header map[string]string, formBody map[string]interface{}, queryBody map[string]interface{}, result interface{}) error {
+	ctx, cancel := c.ensureContext(ctx)
+	defer cancel()
 
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -141,27 +79,44 @@ func (c *APIClient) FormDataRequest(
 	}
 	_ = writer.Close()
 
-	uri := c.BaseURL + path
-	if len(queryBody) > 0 {
-		q := url.Values{}
-		for k, v := range queryBody {
-			q.Set(k, fmt.Sprintf("%v", v))
-		}
-		uri += "?" + q.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, uri, &buf)
+	req, err := http.NewRequestWithContext(ctx, method, c.buildURI(path, queryBody), &buf)
 	if err != nil {
 		return err
 	}
 
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	c.setHeaders(req, header, writer.FormDataContentType())
+	return c.doRequest(req, result)
+}
+
+// ensureContext 确保有有效的 context，如果没有则创建带超时的 context
+// 注意：返回的 context 的 cancel 函数会在请求完成后自动调用
+func (c *APIClient) ensureContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), c.DefaultTimeout)
+	}
+	return ctx, func() {} // 空函数，因为外部传入的 context 不需要我们取消
+}
+
+// setHeaders 设置请求头
+func (c *APIClient) setHeaders(req *http.Request, header map[string]string, defaultContentType string) {
 	for k, v := range header {
 		req.Header.Set(k, v)
 	}
+	if _, ok := header["Content-Type"]; !ok && defaultContentType != "" {
+		req.Header.Set("Content-Type", defaultContentType)
+	}
+}
 
+// doRequest 执行 HTTP 请求并处理响应
+func (c *APIClient) doRequest(req *http.Request, result interface{}) error {
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("request timeout")
+		}
+		if errors.Is(err, context.Canceled) {
+			return fmt.Errorf("request canceled")
+		}
 		return err
 	}
 	defer resp.Body.Close()
@@ -174,6 +129,18 @@ func (c *APIClient) FormDataRequest(
 	if result != nil {
 		return json.Unmarshal(body, result)
 	}
-
 	return nil
+}
+
+// buildURI 构建完整的请求 URI
+func (c *APIClient) buildURI(path string, queryBody map[string]interface{}) string {
+	uri := c.BaseURL + path
+	if len(queryBody) > 0 {
+		q := url.Values{}
+		for k, v := range queryBody {
+			q.Set(k, fmt.Sprintf("%v", v))
+		}
+		uri += "?" + q.Encode()
+	}
+	return uri
 }

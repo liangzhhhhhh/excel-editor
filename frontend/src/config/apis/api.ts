@@ -39,7 +39,7 @@ export async function runApi<T>(
         if (!silent) {
             ElMessage.error(err?.message || '请求异常')
         }
-
+        console.log(err)
         // 写日志到本地
         LogError(err.message || '未知错误', err.stack || '')
 

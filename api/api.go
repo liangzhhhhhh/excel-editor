@@ -53,7 +53,7 @@ func GetActInfo(actId int32) (*Response[ActConfigRespBody], error) {
 
 func Login(username, password string) (*TokenResponse, error) {
 	var endpoint = "/"
-	c := NewAPIClient("https://fatcat-admin-test.54030.com")
+	c := NewAPIClient(OaURL)
 	var resp TokenResponse
 	err := c.FormDataRequest(nil, http.MethodPost, endpoint, nil, map[string]interface{}{
 		"UserName": username,

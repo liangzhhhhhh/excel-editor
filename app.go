@@ -111,8 +111,8 @@ func (a *App) FetchActConfig(actId, ab string) (resp CommonResponse) {
 		return ErrorResponse(err.Error())
 	}
 
-	md5StrOld := md5Hex(httpResp.Data.Content)
-	if err := UpdateActMD5(actId, md5StrOld); err != nil {
+	md5StrNew := md5Hex(httpResp.Data.Content)
+	if err := UpdateActMD5(actId, md5StrNew); err != nil {
 		return ErrorResponse(err.Error())
 	}
 
@@ -215,8 +215,8 @@ func (a *App) GetTempAct(actId, ab string) CommonResponse {
 		return ErrorResponse("read temp act dir failed: " + err.Error())
 	}
 
-	// 如果提供了 actId 和 ab，尝试查找指定文件
-	if actId != "" && ab != "" {
+	// actId 是必须的，如果提供了 actId，尝试查找指定文件
+	if actId != "" {
 		targetPrefix, err := dataparser.GetWorkbookName(actId, ab)
 		if err != nil {
 			return ErrorResponse("invalid actId or ab: " + err.Error())
@@ -230,10 +230,11 @@ func (a *App) GetTempAct(actId, ab string) CommonResponse {
 				return a.readTempActFile(dir, entry.Name())
 			}
 		}
+		// 指定文件未找到
 		return GenResponse(LocalFileNoFoundCode, "no temp act file found for specified actId and ab")
 	}
 
-	// 未提供完整参数，查找最近修改的文件
+	// 未提供 actId，查找最近修改的文件
 	latestFile := a.findLatestFile(entries)
 	if latestFile == nil {
 		return GenResponse(LocalFileNoFoundCode, "no temp act file found")
@@ -313,7 +314,10 @@ func (a *App) ConsistentCheck(actId string) CommonResponse {
 	if md5StrOld != md5StrNew {
 		return GenResponse(ConsistentCheckCode, "活动配置已修改，请选择是否重新加载？")
 	}
-
+	// 重新存入
+	if err := SaveActMD5Map(md5Map); err != nil {
+		return ErrorResponse(err.Error())
+	}
 	return NormalResponse(nil)
 }
 
@@ -324,7 +328,6 @@ func (a *App) ConsistentSync(actId string) CommonResponse {
 	if resp.Status != NormalCode {
 		return resp
 	}
-
 	md5Map, err := LoadActMD5Map()
 	if err != nil {
 		return ErrorResponse(err.Error())
@@ -395,6 +398,15 @@ func SaveActMD5Map(data ActMD5Map) error {
 
 	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
 		return err
+	}
+
+	// Windows 上如果目标文件已存在，需要先删除才能重命名
+	if _, err := os.Stat(filePath); err == nil {
+		if err := os.Remove(filePath); err != nil {
+			// 如果删除失败，尝试清理临时文件
+			_ = os.Remove(tmpPath)
+			return err
+		}
 	}
 
 	return os.Rename(tmpPath, filePath)
